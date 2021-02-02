@@ -887,7 +887,7 @@ void TaskSyscallState::abort_syscall_results() {
 template <typename Arch>
 static void prepare_recvmsg(RecordTask* t, TaskSyscallState& syscall_state,
                             remote_ptr<typename Arch::msghdr> msgp,
-                            const ParamSize& io_size) {
+                            const ParamSize& io_size) { 
   auto namelen_ptr = REMOTE_PTR_FIELD(msgp, msg_namelen);
   syscall_state.mem_ptr_parameter(
       REMOTE_PTR_FIELD(msgp, msg_name),

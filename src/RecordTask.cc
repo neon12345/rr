@@ -1627,8 +1627,28 @@ void RecordTask::record_remote(remote_ptr<void> addr, ssize_t num_bytes) {
     return;
   }
 
-  auto buf = read_mem(addr.cast<uint8_t>(), num_bytes);
-  trace_writer().write_raw(rec_tid, buf.data(), num_bytes, addr);
+  bool ok;
+  std::vector<uint8_t> data;
+  data.resize(num_bytes);
+  ssize_t num;
+  ssize_t left = num_bytes;
+  while(left > 0)
+  {
+      num = read_mem(data, addr.cast<uint8_t>(), left, &ok);
+      if(num > 0) {
+          trace_writer().write_raw(rec_tid, data.data(), num, addr);
+          addr += num;
+          left -= num;
+      } else {
+        if(errno != EIO) {
+            ASSERT(this, false) << "Should have read " << left << " bytes from "
+                                << addr << ", but only read " << num;
+            break;
+        }
+        addr += PAGE_SIZE;
+        left -= PAGE_SIZE;
+      }
+  }
 }
 
 void RecordTask::record_remote_writable(remote_ptr<void> addr,

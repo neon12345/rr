@@ -155,6 +155,10 @@ static bool handle_ptrace_exit_event(RecordTask* t) {
     return false;
   }
 
+  while(t->ev().type() == EV_CUSTOM) {
+     t->pop_event(EV_CUSTOM);
+  }
+  
   if (t->stable_exit) {
     LOG(debug) << "stable exit";
   } else {
@@ -1892,7 +1896,9 @@ void RecordSession::runnable_state_changed(RecordTask* t, StepState* step_state,
       process_syscall_entry(t, step_state, step_result, syscall_arch);
       return;
     }
-
+    case EV_CUSTOM: {
+      return;
+    }
     default:
       return;
   }
@@ -2205,6 +2211,9 @@ static string lookup_by_path(const string& name) {
   session->set_asan_active(force_asan_active ||
                            !exe_info.libasan_path.empty() ||
                            exe_info.has_asan_symbols);
+
+  session->InitCustomEvent();
+
   return session;
 }
 
@@ -2279,6 +2288,29 @@ bool RecordSession::can_end() {
   return initial_thread_group->task_set().empty();
 }
 
+static void record_custom(RecordTask* t, bool sync = false)
+{
+    Registers* regs = nullptr;
+    if(sync)
+    {
+        auto IT = t->pending_events.end();
+        for(auto FRONT = t->pending_events.begin(); --IT != FRONT;)
+        {
+            if(!IT->is_custom_event())
+                break;
+        }
+        if(IT->is_syscall_event())
+        {
+            regs = &IT->Syscall().regs;
+        }
+    }
+    while(t->ev().type() == EV_CUSTOM) {
+      const Event ev = t->ev();
+        t->pop_event(ev.type());
+        t->record_event(ev, RecordTask::FLUSH_SYSCALLBUF, RecordTask::DONT_RESET_SYSCALLBUF, regs);
+    }
+}
+
 RecordSession::RecordResult RecordSession::record_step() {
   RecordResult result;
 
@@ -2291,8 +2323,14 @@ RecordSession::RecordResult RecordSession::record_step() {
   result.status = STEP_CONTINUE;
 
   RecordTask* prev_task = scheduler().current();
+  if(prev_task)
+  {
+      record_custom(prev_task);
+  }
   auto rescheduled = scheduler().reschedule(last_task_switchable);
   if (rescheduled.interrupted_by_signal) {
+    record_custom(scheduler().current());
+
     // The scheduler was waiting for some task to become active, but was
     // interrupted by a signal. Yield to our caller now to give the caller
     // a chance to do something triggered by the signal
@@ -2308,6 +2346,10 @@ RecordSession::RecordResult RecordSession::record_step() {
     }
     prev_task->pop_event(EV_SCHED);
   }
+
+  NoWait();
+  record_custom(t, true);
+
   if (rescheduled.started_new_timeslice) {
     t->registers_at_start_of_last_timeslice = t->regs();
     t->time_at_start_of_last_timeslice = trace_writer().time();
@@ -2369,6 +2411,9 @@ RecordSession::RecordResult RecordSession::record_step() {
         break;
     }
   }
+
+  NoWait();
+  record_custom(t, true);
 
   t->verify_signal_states();
 

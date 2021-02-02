@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "AddressSpace.h"
+#include "CustomEventHandler.h"
 #include "MonitoredSharedMemory.h"
 #include "TaskishUid.h"
 #include "TraceStream.h"
@@ -364,6 +365,13 @@ public:
 
   const ThreadGroupMap& thread_group_map() const { return thread_group_map_; }
 
+  void InitCustomEvent();
+  int WaitId(idtype_t idtype, id_t id, siginfo_t *info, int options);
+  pid_t WaitPid(pid_t pid, int* stat_loc, int options);
+  void NoWait();
+  void SetNoWait(pid_t sync_pid = -1, size_t es = 0, size_t el = 0);
+
+  static Session* GetSession(CustomEventHandler* ev);
 protected:
   Session();
   virtual ~Session();
@@ -386,6 +394,8 @@ protected:
   // of tasks (i.e., almost anything!). Not really const!
   void finish_initializing() const;
   void assert_fully_initialized() const;
+
+  CustomEventHandler custom_ev;
 
   AddressSpaceMap vm_map;
   TaskMap task_map;

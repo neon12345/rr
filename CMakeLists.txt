@@ -448,6 +448,7 @@ set(RR_SOURCES
   src/Command.cc
   src/CompressedReader.cc
   src/CompressedWriter.cc
+  src/CustomEventHandler.cc
   src/CPUFeaturesCommand.cc
   src/CPUIDBugDetector.cc
   src/DiversionSession.cc

@@ -293,5 +293,9 @@ struct Frame {
     }
     patchAfterSyscall @26: Void;
     patchVsyscall @27: Void;
+    custom :group {
+        index @28 :UInt64;
+        data @29 :UInt64;
+    }
   }
 }

@@ -52,7 +52,7 @@ public:
   const TraceFrame& current_trace_frame();
   FrameTime current_frame_time();
   /** Restore the next chunk of saved data from the trace to this. */
-  ssize_t set_data_from_trace();
+  ssize_t set_data_from_trace(bool canFail = false);
   /** Restore all remaining chunks of saved data for the current trace frame. */
   void apply_all_data_records_from_trace();
   /**

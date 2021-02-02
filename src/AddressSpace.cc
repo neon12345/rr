@@ -854,6 +854,23 @@ void* AddressSpace::detach_local_mapping(remote_ptr<void> addr) {
   return p;
 }
 
+bool AddressSpace::find_mapping(remote_ptr<void> addr, const MemoryRange*& range, const Mapping*& map) const {
+  if (addr + page_size() < addr) {
+    // Assume the last byte in the address space is never mapped; avoid overflow
+    return false;
+  }
+  MemoryRange m(floor_page_size(addr), 1);
+  auto it = mem.find(m);
+  if(it != mem.end() && it->first.contains(m))
+  {
+      range = &it->first;
+      map = &it->second;
+      return true;
+  }
+
+  return false;
+}
+
 bool AddressSpace::has_mapping(remote_ptr<void> addr) const {
   if (addr + page_size() < addr) {
     // Assume the last byte in the address space is never mapped; avoid overflow

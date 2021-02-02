@@ -227,6 +227,8 @@ ReplaySession::shr_ptr ReplaySession::clone() {
 
   copy_state_to(*session, emufs(), session->emufs());
 
+  session->InitCustomEvent();
+
   return session;
 }
 
@@ -279,6 +281,8 @@ DiversionSession::shr_ptr ReplaySession::clone_diversion() {
   copy_state_to(*session, emufs(), session->emufs());
   session->finish_initializing();
 
+  session->InitCustomEvent();
+
   return session;
 }
 
@@ -308,6 +312,7 @@ Task* ReplaySession::new_task(pid_t tid, pid_t rec_tid, uint32_t serial,
                   session->trace_reader().peek_frame().tid()));
   session->on_create(t);
 
+  session->InitCustomEvent();
   return session;
 }
 
@@ -678,7 +683,7 @@ static bool do_replay_assist(Task* t) {
 Completion ReplaySession::continue_or_step(ReplayTask* t,
                                            const StepConstraints& constraints,
                                            TicksRequest tick_request,
-                                           ResumeRequest resume_how) {
+                                           ResumeRequest resume_how, bool check) {
   if (constraints.command == RUN_SINGLESTEP) {
     t->resume_execution(RESUME_SINGLESTEP, RESUME_WAIT, tick_request);
     handle_unrecorded_cpuid_fault(t, constraints);
@@ -718,7 +723,8 @@ Completion ReplaySession::continue_or_step(ReplayTask* t,
       return INCOMPLETE;
     }
   }
-  check_pending_sig(t);
+  if(check)
+    check_pending_sig(t);
   return COMPLETE;
 }
 
@@ -827,8 +833,10 @@ Completion ReplaySession::emulate_async_signal(
     // continue as needed.
     continue_or_step(t, constraints,
                      (TicksRequest)(min<Ticks>(MAX_TICKS_REQUEST, ticks_left) -
-                                    PerfCounters::skid_size()));
-    guard_unexpected_signal(t);
+                                    PerfCounters::skid_size()), RESUME_SYSEMU, !trace_frame.event().is_custom_event());
+
+    if(!trace_frame.event().is_custom_event())
+        guard_unexpected_signal(t);
 
     ticks_left = ticks - t->tick_count();
 
@@ -973,7 +981,7 @@ Completion ReplaySession::emulate_async_signal(
       LOG(debug) << "    breaking on target $ip";
       t->vm()->add_breakpoint(ip, BKPT_INTERNAL);
       did_set_internal_breakpoint = true;
-      continue_or_step(t, constraints, RESUME_UNLIMITED_TICKS);
+      continue_or_step(t, constraints, RESUME_UNLIMITED_TICKS, RESUME_SYSEMU, !trace_frame.event().is_custom_event());
       SIGTRAP_run_command = constraints.command;
     } else {
       /* Case (3) above: we can't put a breakpoint
@@ -989,7 +997,7 @@ Completion ReplaySession::emulate_async_signal(
        */
       if (constraints.command == RUN_SINGLESTEP ||
           t->vm()->get_breakpoint_type_at_addr(t->regs().ip()) == BKPT_USER) {
-        continue_or_step(t, constraints, RESUME_UNLIMITED_TICKS);
+        continue_or_step(t, constraints, RESUME_UNLIMITED_TICKS, RESUME_SYSEMU, !trace_frame.event().is_custom_event());
         SIGTRAP_run_command = constraints.command;
       } else {
         vector<const Registers*> states = constraints.stop_before_states;
@@ -999,7 +1007,8 @@ Completion ReplaySession::emulate_async_signal(
         fast_forward_status |=
             fast_forward_through_instruction(t, RESUME_SINGLESTEP, states);
         SIGTRAP_run_command = RUN_SINGLESTEP_FAST_FORWARD;
-        check_pending_sig(t);
+        if(!trace_frame.event().is_custom_event())
+        	check_pending_sig(t);
       }
     }
     pending_SIGTRAP = SIGTRAP == t->stop_sig();
@@ -1017,7 +1026,9 @@ Completion ReplaySession::emulate_async_signal(
      */
     if (!is_same_execution_point(t, regs, ticks_left, &mismatched_regs,
                                  &mismatched_regs_ptr)) {
-      guard_unexpected_signal(t);
+
+        if(!trace_frame.event().is_custom_event())
+            guard_unexpected_signal(t);
     }
 
     guard_overshoot(t, regs, ticks, ticks_left, mismatched_regs_ptr);
@@ -1054,7 +1065,7 @@ Completion ReplaySession::emulate_signal_delivery(ReplayTask* oldtask,
   }
 
   /* Restore the signal-hander frame data, if there was one. */
-  bool restored_sighandler_frame = 0 < t->set_data_from_trace();
+  bool restored_sighandler_frame = 0 < t->set_data_from_trace(true);
   if (restored_sighandler_frame) {
     LOG(debug) << "--> restoring sighandler frame for " << signal_name(sig);
   }
@@ -1679,6 +1690,14 @@ ReplayTask* ReplaySession::setup_replay_one_trace_frame(ReplayTask* t) {
         }
       }
       break;
+    case EV_CUSTOM:
+      current_step.action = TSTEP_PROGRAM_ASYNC_SIGNAL_INTERRUPT;
+      current_step.target.ticks = trace_frame.ticks();
+      current_step.target.signo = 0;
+      if(!custom_ev.IsOpen()) {
+          FATAL() << "event failed: " << ev;
+      }
+      break;
     default:
       FATAL() << "Unexpected event " << ev;
   }
@@ -1781,6 +1800,11 @@ ReplayResult ReplaySession::replay_step(const StepConstraints& constraints) {
           result.break_status.singlestep_complete = true;
         }
       }
+      
+      if(trace_frame.event().is_custom_event()) {
+        custom_ev.SendEvent(t, trace_frame.event().get_custom_index(), trace_frame.event().get_custom_data());
+      }
+
       break;
     case TSTEP_DELIVER_SIGNAL:
       // When we deliver a terminating signal, do not let the singlestep
@@ -1810,6 +1834,7 @@ ReplayResult ReplaySession::replay_step(const StepConstraints& constraints) {
 
   if (t) {
     const Event& ev = trace_frame.event();
+
     if (done_initial_exec() && ev.is_syscall_event() &&
         rr::Flags::get().check_cached_mmaps) {
       t->vm()->verify(t);

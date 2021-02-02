@@ -439,6 +439,8 @@ public:
    */
   bool has_mapping(remote_ptr<void> addr) const;
 
+  bool find_mapping(remote_ptr<void> addr, const MemoryRange *&range, const Mapping *&map) const;
+
   /**
    * If the given memory region is mapped into the local address space, obtain
    * the local address from which the `size` bytes at `addr` can be accessed.

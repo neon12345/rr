@@ -387,8 +387,6 @@ static void remap_shared_mmap(AutoRemoteSyscalls& remote, EmuFs& emu_fs,
 
   LOG(debug) << "    remapping shared region at " << m.map.start() << "-"
              << m.map.end();
-  remote.infallible_syscall(syscall_number_for_munmap(remote.arch()),
-                            m.map.start(), m.map.size());
 
   EmuFile::shr_ptr emu_file;
   if (dest_emu_fs.has_file_for(m.recorded_map)) {
@@ -400,9 +398,14 @@ static void remap_shared_mmap(AutoRemoteSyscalls& remote, EmuFs& emu_fs,
   // TODO: this duplicates some code in replay_syscall.cc, but
   // it's somewhat nontrivial to factor that code out.
   int remote_fd = remote.send_fd(emu_file->fd());
+
   ASSERT(remote.task(), remote_fd >= 0);
   struct stat real_file = remote.task()->stat_fd(remote_fd);
   string real_file_name = remote.task()->file_name_of_fd(remote_fd);
+
+  remote.infallible_syscall(syscall_number_for_munmap(remote.arch()),
+                            m.map.start(), m.map.size());
+
   // XXX this condition is x86/x64-specific, I imagine.
   remote.infallible_mmap_syscall(m.map.start(), m.map.size(), m.map.prot(),
                                  // The remapped segment *must* be
@@ -733,6 +736,52 @@ void Session::do_bind_cpu(TraceStream &trace) {
       }
     }
   }
+}
+
+void Session::InitCustomEvent() {
+    custom_ev.Init(is_recording());
+}
+
+pid_t Session::WaitPid(pid_t pid, int* stat_loc, int options)
+{
+    WaitArgs args;
+    args.wait_pid = true;
+    args.pid = pid;
+    args.stat_loc = stat_loc;
+    args.options = options;
+
+    custom_ev.Wait(args);
+
+    return args.result;
+}
+
+int Session::WaitId(idtype_t idtype, id_t id, siginfo_t *info, int options) {
+    WaitArgs args;
+    args.wait_pid = false;
+    args.idtype = idtype;
+    args.id = id;
+    args.info = info;
+    args.options = options;
+
+    custom_ev.Wait(args);
+
+    return args.result;
+}
+
+void Session::SetNoWait(pid_t sync_pid, size_t es, size_t el)
+{
+    custom_ev.SetNoWait(sync_pid, es, el);
+}
+
+void Session::NoWait()
+{
+    if(is_recording()) {
+        custom_ev.HandleMsg();
+    }
+}
+
+Session* Session::GetSession(CustomEventHandler* ev) {
+    return reinterpret_cast<Session*>(reinterpret_cast<char*>(ev) - reinterpret_cast<char*>(&reinterpret_cast<Session*>(0)->custom_ev));
 }
 
 } // namespace rr

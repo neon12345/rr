@@ -112,8 +112,18 @@ FrameTime ReplayTask::current_frame_time() {
   return current_trace_frame().time();
 }
 
-ssize_t ReplayTask::set_data_from_trace() {
-  auto buf = trace_reader().read_raw_data();
+ssize_t ReplayTask::set_data_from_trace(bool canFail) {
+    TraceReader::RawData buf;
+    if(canFail)
+    {
+        if (!trace_reader().read_raw_data_for_frame(buf)) {
+            return 0;
+        }
+    }
+    else
+    {
+        buf = trace_reader().read_raw_data();
+    }
   if (!buf.addr.is_null() && buf.data.size() > 0) {
     auto t = session().find_task(buf.rec_tid);
     t->write_bytes_helper(buf.addr, buf.data.size(), buf.data.data());

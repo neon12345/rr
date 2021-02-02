@@ -36,6 +36,9 @@ Event::Event(const Event& o) : event_type(o.event_type) {
     case EV_SYSCALLBUF_FLUSH:
       new (&SyscallbufFlush()) SyscallbufFlushEvent(o.SyscallbufFlush());
       return;
+    case EV_CUSTOM:
+      custom_ev = o.custom_ev;
+      return;
     default:
       return;
   }
@@ -84,6 +87,7 @@ bool Event::record_regs() const {
     case EV_SIGNAL:
     case EV_SIGNAL_DELIVERY:
     case EV_SIGNAL_HANDLER:
+    case EV_CUSTOM:
       return true;
     default:
       return false;
@@ -140,6 +144,10 @@ bool Event::is_syscall_event() const {
     default:
       return false;
   }
+}
+
+bool Event::is_custom_event() const {
+    return event_type == EV_CUSTOM;
 }
 
 void Event::log() const { LOG(info) << *this; }
@@ -211,6 +219,7 @@ std::string Event::type_name() const {
       CASE(SYSCALL);
       CASE(SYSCALL_INTERRUPTION);
       CASE(TRACE_TERMINATION);
+      CASE(CUSTOM);
 #undef CASE
     default:
       FATAL() << "Unknown event type " << event_type;

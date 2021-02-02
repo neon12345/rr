@@ -503,6 +503,12 @@ void TraceWriter::write_frame(RecordTask* t, const Event& ev,
       }
       break;
     }
+    case EV_CUSTOM: {
+      auto custom = event.initCustom();
+      custom.setIndex(ev.get_custom_index());
+      custom.setData(ev.get_custom_data());
+      break;
+    }
     default:
       FATAL() << "Event type not recordable";
       break;
@@ -669,6 +675,11 @@ TraceFrame TraceReader::read_frame() {
           FATAL() << "Unknown syscall type";
           break;
       }
+      break;
+    }
+    case trace::Frame::Event::CUSTOM: {
+      auto custom = event.getCustom();
+      ret.ev = Event::custom(custom.getIndex(), custom.getData());
       break;
     }
     default:

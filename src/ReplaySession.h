@@ -338,7 +338,7 @@ private:
   void check_pending_sig(ReplayTask* t);
   Completion continue_or_step(ReplayTask* t, const StepConstraints& constraints,
                               TicksRequest tick_request,
-                              ResumeRequest resume_how = RESUME_SYSEMU);
+                              ResumeRequest resume_how = RESUME_SYSEMU, bool check = true);
   Completion advance_to_ticks_target(ReplayTask* t,
                                      const StepConstraints& constraints);
   Completion emulate_deterministic_signal(ReplayTask* t, int sig,

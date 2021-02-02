@@ -436,7 +436,7 @@ void Scheduler::validate_scheduled_task() {
  * and `tid` and `status` are valid, or false if the wait was interrupted
  * (by timeout or some other signal).
  */
-static bool wait_any(pid_t& tid, WaitStatus& status, double timeout) {
+static bool wait_any(Session& session, pid_t& tid, WaitStatus& status, double timeout) {
   int raw_status;
   if (timeout > 0) {
     struct itimerval timer = { { 0, 0 }, to_timeval(timeout) };
@@ -445,7 +445,7 @@ static bool wait_any(pid_t& tid, WaitStatus& status, double timeout) {
     }
     LOG(debug) << "  Arming one-second timer for polling";
   }
-  tid = waitpid(-1, &raw_status, __WALL | WUNTRACED);
+  tid = session.WaitPid(-1, &raw_status, __WALL | WUNTRACED);
   if (timeout > 0) {
     struct itimerval timer = { { 0, 0 }, { 0, 0 } };
     if (setitimer(ITIMER_REAL, &timer, nullptr) < 0) {
@@ -560,7 +560,7 @@ Scheduler::Rescheduled Scheduler::reschedule(Switchable switchable) {
           ASSERT(current_, ntasks_running == session.tasks().size());
           pid_t tid;
           WaitStatus status;
-          if (!wait_any(tid, status, -1)) {
+          if (!wait_any(session, tid, status, -1)) {
             ASSERT(current_, !must_run_task);
             result.interrupted_by_signal = true;
             return result;
@@ -708,7 +708,7 @@ Scheduler::Rescheduled Scheduler::reschedule(Switchable switchable) {
     do {
       double timeout = enable_poll ? 1 : 0;
       pid_t tid;
-      if (!wait_any(tid, status, timeout)) {
+      if (!wait_any(session, tid, status, timeout)) {
         ASSERT(current_, !must_run_task);
         result.interrupted_by_signal = true;
         return result;

@@ -84,7 +84,7 @@ enum EventType {
   EV_SIGNAL_HANDLER,
   // Use .syscall.
   EV_SYSCALL,
-
+  EV_CUSTOM,
   EV_LAST
 };
 
@@ -199,6 +199,14 @@ struct OpenedFd {
   int fd;
   dev_t device;
   ino_t inode;
+};
+
+struct CustomEvent {
+    CustomEvent(uint64_t index, uint64_t data)
+        : index(index),
+          data(data) {}
+    uint64_t index;
+    uint64_t data;
 };
 
 struct SyscallEvent {
@@ -332,6 +340,8 @@ struct Event {
   bool is_signal_event() const;
   bool is_syscall_event() const;
 
+  bool is_custom_event() const;
+
   /**
    * Dump info about this to INFO log.
    *
@@ -354,6 +364,7 @@ struct Event {
   /** Return a string naming |ev|'s type. */
   std::string type_name() const;
 
+  static Event custom(uint64_t index = 0, uint64_t data = 0) {  Event ev = Event(EV_CUSTOM); ev.custom_ev = CustomEvent(index, data); return ev; }
   static Event noop() { return Event(EV_NOOP); }
   static Event trace_termination() { return Event(EV_TRACE_TERMINATION); }
   static Event instruction_trap() { return Event(EV_INSTRUCTION_TRAP); }
@@ -373,6 +384,8 @@ struct Event {
   static Event exit() { return Event(EV_EXIT); }
   static Event sentinel() { return Event(EV_SENTINEL); }
 
+  uint64_t get_custom_index() const { return custom_ev.index; }
+  uint64_t get_custom_data() const { return custom_ev.data; }
 private:
   Event(EventType type) : event_type(type) {}
 
@@ -383,6 +396,7 @@ private:
     SignalEvent signal;
     SyscallEvent syscall;
     SyscallbufFlushEvent syscallbuf_flush;
+    CustomEvent custom_ev;
   };
 };
 

@@ -20,6 +20,7 @@
 #include <sys/types.h>
 #include <sys/un.h>
 #include <sys/user.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <syscall.h>
 
@@ -1863,7 +1864,7 @@ void Task::wait(double interrupt_after_elapsed) {
       setitimer(ITIMER_REAL, &timer, nullptr);
     }
     siginfo_t info;
-    ret = waitid(P_PID, tid, &info, WSTOPPED);
+    ret = session().WaitId(P_PID, tid, &info, WSTOPPED);
     DEBUG_ASSERT(ret == 0 || ret == -1);
     if (ret == -1) {
       ret = -errno;
@@ -2748,6 +2749,7 @@ ssize_t Task::read_bytes_ptrace(remote_ptr<void> addr, ssize_t buf_size,
 
     long v = fallible_ptrace(PTRACE_PEEKDATA, start_word, nullptr);
     if (errno) {
+        fprintf(stderr, "fallible_ptrace failed %p\n", (void*)addr.as_int());
       break;
     }
     memcpy(static_cast<uint8_t*>(buf) + nread,
@@ -2790,6 +2792,29 @@ ssize_t Task::write_bytes_ptrace(remote_ptr<void> addr, ssize_t buf_size,
   return nwritten;
 }
 
+int32_t Task::map_memFd(remote_ptr<void> addr) {
+     const MemoryRange* range;
+     const AddressSpace::Mapping* map;
+    if(as->find_mapping(addr, range, map) && map->emu_file)
+    {
+        return map->emu_file->fd().get();
+    }
+    return -1;
+}
+
+int32_t Task::map_memFd(remote_ptr<void> addr, off64_t& offset, size_t size) {
+     const MemoryRange* range;
+     const AddressSpace::Mapping* map;
+    if(as->find_mapping(addr, range, map) && map->emu_file)
+    {
+        offset = addr.as_int() - range->start().as_int() + map->map.file_offset_bytes();
+        if(offset + size > map->map.size())
+            return -1;
+        return map->emu_file->fd().get();
+    }
+    return -1;
+}
+
 ssize_t Task::read_bytes_fallible(remote_ptr<void> addr, ssize_t buf_size,
                                   void* buf) {
   ASSERT_ACTIONS(this, buf_size >= 0, << "Invalid buf_size " << buf_size);
@@ -2809,8 +2834,12 @@ ssize_t Task::read_bytes_fallible(remote_ptr<void> addr, ssize_t buf_size,
   ssize_t all_read = 0;
   while (all_read < buf_size) {
     errno = 0;
-    ssize_t nread = pread64(as->mem_fd(), static_cast<uint8_t*>(buf) + all_read,
+    ssize_t nread;
+    do
+    {
+    	nread = pread64(as->mem_fd(), static_cast<uint8_t*>(buf) + all_read,
                             buf_size - all_read, addr.as_int() + all_read);
+    } while(nread == -1 && errno == EINTR);
     // We open the mem_fd just after being notified of
     // exec(), when the Task is created.  Trying to read from that
     // fd seems to return 0 with errno 0.  Reopening the mem fd
@@ -2839,10 +2868,11 @@ ssize_t Task::read_bytes_fallible(remote_ptr<void> addr, ssize_t buf_size,
   return all_read;
 }
 
-void Task::read_bytes_helper(remote_ptr<void> addr, ssize_t buf_size, void* buf,
+ssize_t Task::read_bytes_helper(remote_ptr<void> addr, ssize_t buf_size, void* buf,
                              bool* ok) {
   // pread64 etc can't handle addresses that appear to be negative ...
   // like [vsyscall].
+
   ssize_t nread = read_bytes_fallible(addr, buf_size, buf);
   if (nread != buf_size) {
     if (ok) {
@@ -2852,6 +2882,7 @@ void Task::read_bytes_helper(remote_ptr<void> addr, ssize_t buf_size, void* buf,
                           << addr << ", but only read " << nread;
     }
   }
+  return nread;
 }
 
 /**
@@ -2878,17 +2909,50 @@ static ssize_t safe_pwrite64(Task* t, const void* buf, ssize_t buf_size,
     }
   };
 
+  AutoRemoteSyscalls remote(t);
   if (mappings_to_fix.empty()) {
-    return pwrite_all_fallible(t->vm()->mem_fd(), buf, buf_size, addr.as_int());
+
+      struct
+      {
+          struct iovec local;
+          struct iovec remote;
+      } iovs;
+      iovs.local.iov_len = iovs.remote.iov_len = buf_size;
+      iovs.local.iov_base = (void*)buf;
+      iovs.remote.iov_base = (void*)addr.as_int();
+      t->session().SetNoWait(t->tid, addr.as_int(), buf_size);
+      ssize_t nwritten = process_vm_writev(t->tid, &iovs.local, 1, &iovs.remote, 1, 0);
+      t->session().SetNoWait();
+      if (nwritten == -1)
+      {
+          nwritten = pwrite_all_fallible(t->vm()->mem_fd(), buf, buf_size, addr.as_int());
+      }
+      return nwritten;
   }
 
-  AutoRemoteSyscalls remote(t);
   int mprotect_syscallno = syscall_number_for_mprotect(t->arch());
   for (auto& m : mappings_to_fix) {
     remote.infallible_syscall(mprotect_syscallno, m.start(), m.size(),
                               m.prot() | PROT_WRITE);
   }
-  ssize_t nwritten = pwrite_all_fallible(t->vm()->mem_fd(), buf, buf_size, addr.as_int());
+
+
+  struct
+  {
+      struct iovec local;
+      struct iovec remote;
+  } iovs;
+  iovs.local.iov_len = iovs.remote.iov_len = buf_size;
+  iovs.local.iov_base = (void*)buf;
+  iovs.remote.iov_base = (void*)addr.as_int();
+  t->session().SetNoWait(t->tid, addr.as_int(), buf_size);
+  ssize_t nwritten = process_vm_writev(t->tid, &iovs.local, 1, &iovs.remote, 1, 0);
+  t->session().SetNoWait();
+
+  if(nwritten == -1)
+  {
+    nwritten = pwrite_all_fallible(t->vm()->mem_fd(), buf, buf_size, addr.as_int());
+  }
   for (auto& m : mappings_to_fix) {
     remote.infallible_syscall(mprotect_syscallno, m.start(), m.size(),
                               m.prot());
@@ -2902,7 +2966,7 @@ void Task::write_bytes_helper(remote_ptr<void> addr, ssize_t buf_size,
   if (0 == buf_size) {
     return;
   }
-
+/*
   if (uint8_t* local_addr = as->local_mapping(addr, buf_size)) {
     memcpy(local_addr, buf, buf_size);
     return;
@@ -2919,6 +2983,8 @@ void Task::write_bytes_helper(remote_ptr<void> addr, ssize_t buf_size,
     }
     return;
   }
+
+  */
 
   errno = 0;
   ssize_t nwritten = safe_pwrite64(this, buf, buf_size, addr.as_int());
